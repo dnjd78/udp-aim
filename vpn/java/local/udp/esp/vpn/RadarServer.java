@@ -13,6 +13,7 @@ import org.json.JSONObject;
 /** 本地 HTTP 服务：输出雷达 JSON，页面在电脑端运行。 */
 final class RadarServer {
     static final int PORT = 8899;
+    private static final double FRESH_SEC = 12.0;   // 实体超过这个时间没更新就不显示
 
     private volatile boolean run = false;
     private ServerSocket server = null;
@@ -89,21 +90,36 @@ final class RadarServer {
         sb.append("{\"running\":").append(LiveRuntime.running).append(",\"players\":[");
 
         JSONObject local = null;
-        JSONArray players = new JSONArray();
+        JSONArray all = new JSONArray();
+        JSONArray out = new JSONArray();
         double camYaw = 0, rotYaw = -999;
 
         if (snap != null) {
+            double now = snap.optDouble("now", 0);
+
             JSONArray ents = snap.optJSONArray("entities");
             if (ents != null) {
                 for (int i = 0; i < ents.length(); i++) {
                     JSONObject e = ents.optJSONObject(i);
                     if (e == null) continue;
                     if (e.optBoolean("is_local")) local = e;
-                    else players.put(e);
+                    else all.put(e);
                 }
             }
 
-            // 来源1：上行 3/851 视角向量（可能不是每帧都发）
+            // 只保留同一条连接 + 近 12 秒内还在更新的实体
+            String localStream = (local == null) ? null : local.optString("stream", "");
+            for (int i = 0; i < all.length(); i++) {
+                JSONObject e = all.optJSONObject(i);
+                if (e == null) continue;
+                if (localStream != null && !localStream.isEmpty()
+                        && !localStream.equals(e.optString("stream", ""))) continue;
+                double ts = e.optDouble("timestamp", 0);
+                if (now > 0 && ts > 0 && (now - ts) > FRESH_SEC) continue;
+                out.put(e);
+            }
+
+            // yaw 来源1：上行 3/851
             JSONArray cams = snap.optJSONArray("camera_streams");
             if (cams != null) {
                 double bestTs = -1;
@@ -111,6 +127,8 @@ final class RadarServer {
                     JSONObject c = cams.optJSONObject(i);
                     if (c == null) continue;
                     if (!"decoded".equals(c.optString("status"))) continue;
+                    if (localStream != null && !localStream.isEmpty()
+                            && !localStream.equals(c.optString("stream", ""))) continue;
                     double ts = c.optDouble("timestamp", 0);
                     if (ts >= bestTs) {
                         bestTs = ts;
@@ -119,7 +137,7 @@ final class RadarServer {
                 }
             }
 
-            // 来源2：下行自身实体 Rotation 动作（kind=2 四元数）
+            // yaw 来源2：下行自身 Rotation 动作
             JSONObject acts = snap.optJSONObject("actor_action_state");
             JSONArray recs = acts == null ? null : acts.optJSONArray("local_records");
             if (recs != null) {
@@ -127,6 +145,8 @@ final class RadarServer {
                 for (int i = 0; i < recs.length(); i++) {
                     JSONObject r = recs.optJSONObject(i);
                     if (r == null || r.optInt("kind", -1) != 2) continue;
+                    if (localStream != null && !localStream.isEmpty()
+                            && !localStream.equals(r.optString("stream", ""))) continue;
                     double ts = r.optDouble("timestamp", 0);
                     if (ts < bestTs) continue;
                     JSONObject input = r.optJSONObject("reported_input");
@@ -147,9 +167,9 @@ final class RadarServer {
             }
         }
 
-        for (int i = 0; i < players.length(); i++) {
+        for (int i = 0; i < out.length(); i++) {
             if (i > 0) sb.append(',');
-            sb.append(point(players.optJSONObject(i)));
+            sb.append(point(out.optJSONObject(i)));
         }
 
         sb.append("],\"yaw\":").append(round(camYaw))
