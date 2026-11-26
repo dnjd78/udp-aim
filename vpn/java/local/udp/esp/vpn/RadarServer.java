@@ -10,7 +10,7 @@ import java.nio.charset.StandardCharsets;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-/** 本地 HTTP 服务：只输出雷达 JSON，页面在电脑端运行。 */
+/** 本地 HTTP 服务：输出雷达 JSON，页面在电脑端运行。 */
 final class RadarServer {
     static final int PORT = 8899;
 
@@ -90,7 +90,7 @@ final class RadarServer {
 
         JSONObject local = null;
         JSONArray players = new JSONArray();
-        double yaw = 0;
+        double camYaw = 0, rotYaw = -999;
 
         if (snap != null) {
             JSONArray ents = snap.optJSONArray("entities");
@@ -102,14 +102,47 @@ final class RadarServer {
                     else players.put(e);
                 }
             }
+
+            // 来源1：上行 3/851 视角向量（可能不是每帧都发）
             JSONArray cams = snap.optJSONArray("camera_streams");
             if (cams != null) {
+                double bestTs = -1;
                 for (int i = 0; i < cams.length(); i++) {
                     JSONObject c = cams.optJSONObject(i);
-                    if (c != null && "decoded".equals(c.optString("status"))) {
-                        yaw = c.optDouble("yaw_deg", 0);
-                        break;
+                    if (c == null) continue;
+                    if (!"decoded".equals(c.optString("status"))) continue;
+                    double ts = c.optDouble("timestamp", 0);
+                    if (ts >= bestTs) {
+                        bestTs = ts;
+                        camYaw = c.optDouble("yaw_deg", 0);
                     }
+                }
+            }
+
+            // 来源2：下行自身实体 Rotation 动作（kind=2 四元数）
+            JSONObject acts = snap.optJSONObject("actor_action_state");
+            JSONArray recs = acts == null ? null : acts.optJSONArray("local_records");
+            if (recs != null) {
+                double bestTs = -1;
+                for (int i = 0; i < recs.length(); i++) {
+                    JSONObject r = recs.optJSONObject(i);
+                    if (r == null || r.optInt("kind", -1) != 2) continue;
+                    double ts = r.optDouble("timestamp", 0);
+                    if (ts < bestTs) continue;
+                    JSONObject input = r.optJSONObject("reported_input");
+                    if (input == null) continue;
+                    JSONObject q = input.optJSONObject("reported_actor_rotation");
+                    if (q == null) continue;
+                    double qx = q.optDouble("x", 0);
+                    double qy = q.optDouble("y", 0);
+                    double qz = q.optDouble("z", 0);
+                    double qw = q.optDouble("w", 1);
+                    double y = Math.atan2(2 * (qw * qy + qx * qz),
+                                          1 - 2 * (qy * qy + qz * qz));
+                    double deg = Math.toDegrees(y);
+                    if (deg < 0) deg += 360;
+                    bestTs = ts;
+                    rotYaw = deg;
                 }
             }
         }
@@ -118,7 +151,10 @@ final class RadarServer {
             if (i > 0) sb.append(',');
             sb.append(point(players.optJSONObject(i)));
         }
-        sb.append("],\"yaw\":").append(round(yaw)).append(",\"local\":");
+
+        sb.append("],\"yaw\":").append(round(camYaw))
+          .append(",\"rotYaw\":").append(round(rotYaw))
+          .append(",\"local\":");
         if (local == null) sb.append("null");
         else sb.append(point(local));
         sb.append('}');
