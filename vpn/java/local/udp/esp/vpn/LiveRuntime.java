@@ -4,8 +4,9 @@ import org.json.JSONObject;
 
 /** Shared state between the forwarding, decoding and overlay threads. */
 final class LiveRuntime {
-    static volatile JSONObject snapshot;
+       static volatile JSONObject snapshot;
     static volatile String status = "尚未启动 VPN";
+    static volatile String diag = "";
     static volatile boolean running;
     static volatile NearestTarget.Table targets = NearestTarget.Table.EMPTY;
 
@@ -43,6 +44,6 @@ final class LiveRuntime {
         viewStatus = "等待登录与场景";
         rotationStatus = "等待场景";
     }
-    static String viewSummary() { return "水平跟随：" + (viewControl.enabled ? "已开启" : "已关闭"); }
+       static String viewSummary() { return "水平跟随：" + (viewControl.enabled ? "已开启" : "已关闭") + "\n" + diag; }
     private LiveRuntime() {}
 }
