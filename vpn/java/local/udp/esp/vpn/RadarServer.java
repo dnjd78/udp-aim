@@ -10,10 +10,10 @@ import java.nio.charset.StandardCharsets;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-/** 本地 HTTP 服务：输出雷达 JSON，页面在电脑端运行。 */
+/** 本地 HTTP 服务：/ 返回雷达页面，/api/state 返回 JSON。 */
 final class RadarServer {
     static final int PORT = 8899;
-    private static final double FRESH_SEC = 12.0;   // 实体超过这个时间没更新就不显示
+    private static final double FRESH_SEC = 12.0;
 
     private volatile boolean run = false;
     private ServerSocket server = null;
@@ -64,13 +64,25 @@ final class RadarServer {
                     new InputStreamReader(s.getInputStream(), StandardCharsets.UTF_8));
             String line = in.readLine();
             if (line == null) { s.close(); return; }
+            String[] parts = line.split(" ");
+            String path = parts.length > 1 ? parts[1] : "/";
             String h;
             while ((h = in.readLine()) != null && !h.isEmpty()) { }
 
-            byte[] data = state().getBytes(StandardCharsets.UTF_8);
+            String body;
+            String type;
+            if (path.startsWith("/api/state")) {
+                body = state();
+                type = "application/json; charset=utf-8";
+            } else {
+                body = PAGE;
+                type = "text/html; charset=utf-8";
+            }
+
+            byte[] data = body.getBytes(StandardCharsets.UTF_8);
             OutputStream out = s.getOutputStream();
             String head = "HTTP/1.1 200 OK\r\n"
-                    + "Content-Type: application/json; charset=utf-8\r\n"
+                    + "Content-Type: " + type + "\r\n"
                     + "Content-Length: " + data.length + "\r\n"
                     + "Access-Control-Allow-Origin: *\r\n"
                     + "Cache-Control: no-store\r\n"
@@ -96,7 +108,6 @@ final class RadarServer {
 
         if (snap != null) {
             double now = snap.optDouble("now", 0);
-
             JSONArray ents = snap.optJSONArray("entities");
             if (ents != null) {
                 for (int i = 0; i < ents.length(); i++) {
@@ -106,8 +117,6 @@ final class RadarServer {
                     else all.put(e);
                 }
             }
-
-            // 只保留同一条连接 + 近 12 秒内还在更新的实体
             String localStream = (local == null) ? null : local.optString("stream", "");
             for (int i = 0; i < all.length(); i++) {
                 JSONObject e = all.optJSONObject(i);
@@ -118,8 +127,6 @@ final class RadarServer {
                 if (now > 0 && ts > 0 && (now - ts) > FRESH_SEC) continue;
                 out.put(e);
             }
-
-            // yaw 来源1：上行 3/851
             JSONArray cams = snap.optJSONArray("camera_streams");
             if (cams != null) {
                 double bestTs = -1;
@@ -130,14 +137,9 @@ final class RadarServer {
                     if (localStream != null && !localStream.isEmpty()
                             && !localStream.equals(c.optString("stream", ""))) continue;
                     double ts = c.optDouble("timestamp", 0);
-                    if (ts >= bestTs) {
-                        bestTs = ts;
-                        camYaw = c.optDouble("yaw_deg", 0);
-                    }
+                    if (ts >= bestTs) { bestTs = ts; camYaw = c.optDouble("yaw_deg", 0); }
                 }
             }
-
-            // yaw 来源2：下行自身 Rotation 动作
             JSONObject acts = snap.optJSONObject("actor_action_state");
             JSONArray recs = acts == null ? null : acts.optJSONArray("local_records");
             if (recs != null) {
@@ -171,7 +173,6 @@ final class RadarServer {
             if (i > 0) sb.append(',');
             sb.append(point(out.optJSONObject(i)));
         }
-
         sb.append("],\"yaw\":").append(round(camYaw))
           .append(",\"rotYaw\":").append(round(rotYaw))
           .append(",\"local\":");
@@ -205,4 +206,45 @@ final class RadarServer {
         }
         return b.toString();
     }
+
+    private static final String PAGE =
+        "<!doctype html><html><head><meta charset='utf-8'>" +
+        "<meta name='viewport' content='width=device-width,initial-scale=1,maximum-scale=1'>" +
+        "<title>Radar</title><style>" +
+        "html,body{margin:0;height:100%;background:#0a0e13;color:#dde;font:12px monospace;overflow:hidden}" +
+        "canvas{display:block}" +
+        "</style></head><body><canvas id='c'></canvas>" +
+        "<div id='h' style='position:fixed;left:8px;top:8px;color:#8fa;text-shadow:0 0 4px #000'>waiting</div>" +
+        "<script>" +
+        "var c=document.getElementById('c'),x=c.getContext('2d'),h=document.getElementById('h'),st=null;" +
+        "function rs(){c.width=innerWidth;c.height=innerHeight;}window.onresize=rs;rs();" +
+        "var D=['北','东北','东','东南','南','西南','西','西北'];" +
+        "function br(a,b){var t=Math.atan2(a,b)*180/Math.PI;if(t<0)t+=360;return D[Math.round(t/45)%8];}" +
+        "function tick(){var q=new XMLHttpRequest();q.open('GET','/api/state?t='+Date.now(),true);" +
+        "q.onload=function(){try{st=JSON.parse(q.responseText)}catch(e){}};q.send();draw();setTimeout(tick,100);}" +
+        "function draw(){" +
+        "var W=c.width,H=c.height,cx=W/2,cy=H/2;" +
+        "var SC=Math.min(W,H)/800+0.45;" +
+        "x.clearRect(0,0,W,H);" +
+        "x.strokeStyle='#2e4459';x.lineWidth=1.2;" +
+        "for(var r=100;r<5000;r+=100){var rr=r*SC;if(rr>Math.max(W,H))break;" +
+        "x.beginPath();x.arc(cx,cy,rr,0,7);x.stroke();" +
+        "x.fillStyle='#3d5a73';x.font='9px monospace';x.fillText(r, cx+rr-16, cy-3);}" +
+        "x.strokeStyle='#3a5470';x.beginPath();" +
+        "x.moveTo(cx,0);x.lineTo(cx,H);x.moveTo(0,cy);x.lineTo(W,cy);x.stroke();" +
+        "if(!st||!st.local){h.textContent='waiting';return;}" +
+        "var l=st.local;" +
+        "for(var i=0;i<st.players.length;i++){" +
+        "var p=st.players[i],dx=p.x-l.x,dz=p.z-l.z,d=Math.sqrt(dx*dx+dz*dz);" +
+        "var px=cx+dx*SC,py=cy-dz*SC;" +
+        "if(px<-80||px>W+80||py<-80||py>H+80)continue;" +
+        "x.fillStyle='#ff3b3b';x.beginPath();x.arc(px,py,5,0,7);x.fill();" +
+        "x.strokeStyle='#ff8080';x.lineWidth=1;x.beginPath();x.arc(px,py,9,0,7);x.stroke();" +
+        "x.font='12px monospace';x.fillStyle='#e8eef5';x.fillText(p.name||'?',px+12,py-2);" +
+        "x.fillStyle='#8fa8bd';x.fillText(d.toFixed(0)+' '+br(dx,dz),px+12,py+13);}" +
+        "x.fillStyle='#22f5a0';x.beginPath();x.arc(cx,cy,6,0,7);x.fill();" +
+        "x.strokeStyle='#22f5a0';x.beginPath();x.arc(cx,cy,14,0,7);x.stroke();" +
+        "h.textContent='players='+st.players.length;}" +
+        "tick();" +
+        "</script></body></html>";
 }
