@@ -28,7 +28,7 @@ jobs:
           log-accepted-android-sdk-licenses: false
       - name: Install Android components
         run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0' 'ndk;26.3.11579264'
-            - name: Check source release
+      - name: Check source release
         run: |
           python3 -B tools/check_release.py --write-manifest
           python3 -B tools/check_release.py
