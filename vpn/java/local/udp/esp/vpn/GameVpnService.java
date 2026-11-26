@@ -125,7 +125,30 @@ public final class GameVpnService extends VpnService {
                     if(stopping)break;
                     LiveRuntime.targets=NearestTarget.fromSnapshot(snapshot,System.currentTimeMillis()/1000.0);
                     LiveRuntime.snapshot=snapshot;
-                    LiveRuntime.status="VPN 运行中";
+                                        LiveRuntime.status="VPN 运行中";
+                    try {
+                        org.json.JSONArray cs = snapshot.optJSONArray("camera_streams");
+                        org.json.JSONArray ctx = snapshot.optJSONArray("camera_context");
+                        org.json.JSONArray ents = snapshot.optJSONArray("entities");
+                        int localCount = 0;
+                        if (ents != null) for (int i = 0; i < ents.length(); i++) {
+                            org.json.JSONObject e = ents.optJSONObject(i);
+                            if (e != null && e.optBoolean("is_local")) localCount++;
+                        }
+                        String g = "";
+                        if (ctx != null && ctx.length() > 0) {
+                            org.json.JSONObject c0 = ctx.optJSONObject(0);
+                            g = " gt=" + c0.optInt("gameplay_type", -1) + " gid=" + c0.optInt("gameplay_id", -1);
+                        }
+                        LiveRuntime.diag = "cam=" + decoder.cameraMessages
+                            + " scene=" + decoder.sceneMessages
+                            + " id=" + decoder.identityMessages
+                            + " err=" + decoder.decodeErrors
+                            + " cs=" + (cs == null ? 0 : cs.length())
+                            + " ents=" + (ents == null ? 0 : ents.length())
+                            + " local=" + localCount + g
+                            + (decoder.lastError.isEmpty() ? "" : (" ERR:" + decoder.lastError));
+                    } catch (Exception ignored) {}
                     dirty=false;published=now;
                 }
             }
